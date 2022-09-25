@@ -92,7 +92,7 @@ module Vault::iterable_table {
         table_with_length::empty(&table.inner)
     }
 
-    /// Returns true iff `table` contains an entry for `key`.
+    /// Returns true if `table` contains an entry for `key`.
     public fun contains<K: copy + store + drop, V: store>(table: &IterableTable<K, V>, key: K): bool {
         table_with_length::contains(&table.inner, key)
     }

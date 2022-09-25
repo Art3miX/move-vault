@@ -1,8 +1,7 @@
 module Vault::vault {
     use aptos_std::signer::address_of;
-    use aptos_std::vector;
+    use std::vector;
     use aptos_framework::coin::{Self, Coin};
-    use aptos_std::type_info::{TypeInfo, type_of};
     use Vault::iterable_table;
 
     struct Config has key {
@@ -34,6 +33,10 @@ module Vault::vault {
         move_to<Config>(admin, Config {
             paused: false,
             coin_index: 0,
+        });
+
+        move_to<State>(admin, State {
+            users: vector::empty(),
         })
     }
 
@@ -50,7 +53,7 @@ module Vault::vault {
         })
     }
 
-    public entry fun Deposit<CoinType> (sender: signer, amount: u64) acquires Config, State, Vault, User {
+    public entry fun deposit<CoinType> (sender: &signer, amount: u64) acquires Config, State, Vault, User {
         //Make sure deposits are not paused.
         ensure_not_paused();
 
@@ -60,30 +63,30 @@ module Vault::vault {
         let state = borrow_global_mut<State>(@Vault);
 
         // We make sure the user exists and set if not.
-        ensure_user_exists(&sender, state);
+        ensure_user_exists(sender, state);
 
-        let user = borrow_global_mut<User>(address_of(&sender));
+        let user = borrow_global_mut<User>(address_of(sender));
 
         //We take the coin from our Vault
         let vault = borrow_global_mut<Vault<CoinType>>(@Vault);
         let coin_id = vault.id;
 
         //withdraw from the sender
-        let sender_coin = coin::withdraw<CoinType>(&sender, amount);
+        let sender_coin = coin::withdraw<CoinType>(sender, amount);
 
         // Merge the balances
         coin::merge(&mut vault.coin, sender_coin);
 
         //Check if user already deposited this coin before.
         if(iterable_table::contains(&user.deposits, coin_id)) {
-            let deposit = *iterable_table::borrow_mut(&mut user.deposits, coin_id);
-            deposit = deposit + coin::value(&sender_coin);
+            let deposit = iterable_table::remove(&mut user.deposits, coin_id);
+            iterable_table::add(&mut user.deposits, coin_id, (deposit + amount));
         } else {
-            iterable_table::add(&mut user.deposits, coin_id, coin::value(&sender_coin));
+            iterable_table::add(&mut user.deposits, coin_id, amount);
         }
     }
 
-    public entry fun Withdraw<CoinType> (sender: &signer, amount: u64) acquires Config, State, Vault, User {
+    public entry fun withdraw<CoinType> (sender: &signer, amount: u64) acquires Config, State, Vault, User {
         //Make sure deposits are not paused.
         ensure_not_paused();
 
@@ -112,19 +115,19 @@ module Vault::vault {
         coin::deposit(address_of(sender), withdraw);
 
         // Update the deposit of the sender
-        let deposit = *iterable_table::borrow_mut(&mut user.deposits, coin_id);
-        deposit = deposit - coin::value(&withdraw);
+        let deposit = iterable_table::remove(&mut user.deposits, coin_id);
+        iterable_table::add(&mut user.deposits, coin_id, (deposit - amount));
     }
 
     /// Pause Vault operation
-    public entry fun Pause(admin: &signer) acquires Config {
+    public entry fun pause(admin: &signer) acquires Config {
         verify_admin(admin);
 
         borrow_global_mut<Config>(address_of(admin)).paused = true;
     }
 
     /// Unpause Vault operation
-    public entry fun Unpause(admin: &signer) acquires Config {
+    public entry fun unpause(admin: &signer) acquires Config {
         verify_admin(admin);
 
         borrow_global_mut<Config>(address_of(admin)).paused = false;
@@ -134,7 +137,7 @@ module Vault::vault {
         assert!(address_of(admin) == @Vault, ENOT_ADMIN);
     }
 
-    // Probably a good idea to make a function like that to see if a user can withdraw instead of failing if he can't.
+    // Probably a good idea to make a function/query like that to see if a user can withdraw instead of failing if he can't.
     // public fun can_withdraw(sender: signer) {
     //
     // }
@@ -157,5 +160,106 @@ module Vault::vault {
                 deposits: iterable_table::new<u64, u64>(),
             })
         }
+    }
+
+    // TESTS
+    struct TestCoin {}
+
+    struct SomeCoin has key {
+        test_coin: Coin<TestCoin>,
+
+        cap: coin::MintCapability<TestCoin>,
+        burn: coin::BurnCapability<TestCoin>,
+        freeze: coin::FreezeCapability<TestCoin>,
+    }
+
+    fun init_coin_store(user: &signer) acquires SomeCoin {
+        coin::register<TestCoin>(user);
+        let faucet_amount = 1000;
+        let some_coins = borrow_global_mut<SomeCoin>(@Vault);
+        let test_coin = coin::extract(&mut some_coins.test_coin, faucet_amount);
+
+        coin::deposit(address_of(user), test_coin);
+    }
+
+    fun do_init(admin: &signer)  acquires Config{
+        use std::string;
+        let name = string::utf8(b"name");
+
+        let (burn, freeze, cap) = coin::initialize<TestCoin>(admin, copy name, copy name, 0, false);
+        let mint_amount = 1000000000000;
+
+        move_to(admin, SomeCoin {
+            test_coin: coin::mint(mint_amount, &cap),
+            burn,
+            cap,
+            freeze,
+        });
+
+        init_vault(admin);
+        admin_add_coin<TestCoin>(admin);
+    }
+
+    #[test_only(admin=@Vault, user=@0x1001)]
+    fun test_init(admin: &signer, user: &signer) acquires Config, SomeCoin {
+        use aptos_framework::account;
+        account::create_account_for_test(address_of(admin));
+        account::create_account_for_test(address_of(user));
+
+        do_init(admin);
+        init_coin_store(user);
+    }
+
+    #[test(admin=@Vault, user=@0x1001)]
+    fun test_deposit_success(admin: &signer, user: &signer) acquires Config, SomeCoin, State, Vault, User {
+        test_init(admin, user);
+
+        deposit<TestCoin>(user, 999);
+    }
+
+    #[test(admin=@Vault, user=@0x1001)]
+    #[expected_failure]
+    fun test_deposit_fail(admin: &signer, user: &signer) acquires Config, SomeCoin, State, Vault, User {
+        test_init(admin, user);
+
+        deposit<TestCoin>(user, 10000);
+    }
+
+    #[test(admin=@Vault, user=@0x1001)]
+    fun test_withdraw_success(admin: &signer, user: &signer) acquires Config, SomeCoin, State, Vault, User {
+        test_init(admin, user);
+
+        deposit<TestCoin>(user, 1000);
+        withdraw<TestCoin>(user, 1000);
+    }
+
+    #[test(admin=@Vault, user=@0x1001)]
+    #[expected_failure]
+    fun test_withdraw_fail(admin: &signer, user: &signer) acquires Config, SomeCoin, State, Vault, User {
+        test_init(admin, user);
+
+        deposit<TestCoin>(user, 1000);
+        withdraw<TestCoin>(user, 2000);
+    }
+
+    #[test(admin=@Vault, user=@0x1001)]
+    #[expected_failure]
+    fun test_pause(admin: &signer, user: &signer) acquires Config, SomeCoin, State, Vault, User {
+        test_init(admin, user);
+
+        pause(admin);
+
+        deposit<TestCoin>(user, 1000);
+    }
+
+    #[test(admin=@Vault, user=@0x1001)]
+    fun test_unpause(admin: &signer, user: &signer) acquires Config, SomeCoin, State, Vault, User {
+        test_init(admin, user);
+
+        pause(admin);
+
+        unpause(admin);
+
+        deposit<TestCoin>(user, 1000);
     }
 }

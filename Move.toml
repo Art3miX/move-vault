@@ -3,7 +3,7 @@ name = "Vault-test"
 version = "0.0.0"
 
 [addresses]
-Vault = "35bf42ae454341bc4c129cf20d0111b013dbfd25b65dced507f18655a74da477"
+Vault = "0x35bf42ae454341bc4c129cf20d0111b013dbfd25b65dced507f18655a74da477"
 
 [dependencies]
 AptosStdlib = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-stdlib/", rev = "bc8e5eee8a0fe6284b3e3e26d27ad1e2227484fc" }
